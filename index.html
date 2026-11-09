@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clasificador de ropa</title>
+<style>
+  :root {
+    --fondo: #f6f5f1;
+    --tarjeta: #ffffff;
+    --texto: #1f1e1a;
+    --suave: #6b6a63;
+    --borde: #dcdad2;
+    --acento: #c2562d;
+    --barra: #e8e6de;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo: #181816;
+      --tarjeta: #232320;
+      --texto: #ecebe5;
+      --suave: #9a988f;
+      --borde: #3a3934;
+      --acento: #e5784e;
+      --barra: #33322d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px;
+    background: var(--fondo); color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 800px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--suave); margin: 0 0 20px; }
+  .grid { display: grid; grid-template-columns: 300px 1fr; gap: 20px; }
+  @media (max-width: 680px) { .grid { grid-template-columns: 1fr; } }
+  .tarjeta {
+    background: var(--tarjeta); border: 1px solid var(--borde);
+    border-radius: 12px; padding: 16px;
+  }
+  canvas#lienzo {
+    width: 100%; max-width: 268px; aspect-ratio: 1; display: block; margin: 0 auto;
+    border-radius: 8px; background: #000; cursor: crosshair; touch-action: none;
+  }
+  .botones { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  button, label.boton {
+    font: inherit; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--borde); background: var(--tarjeta); color: var(--texto);
+  }
+  button:hover, label.boton:hover { border-color: var(--acento); }
+  input[type=file] { display: none; }
+  .opcion { margin-top: 10px; color: var(--suave); font-size: .9rem; }
+  .opcion input[type=range] { width: 100%; margin-top: 4px; accent-color: var(--acento); }
+  .resultado { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+  #emoji { font-size: 3.6rem; line-height: 1; min-width: 64px; text-align: center; }
+  #nombre { font-size: 1.5rem; font-weight: 700; color: var(--acento); }
+  #confianza { color: var(--suave); }
+  .fila { display: flex; align-items: center; gap: 8px; margin: 5px 0; font-size: .9rem; }
+  .fila .n { width: 112px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fila .pista { flex: 1; height: 14px; background: var(--barra); border-radius: 7px; overflow: hidden; }
+  .fila .relleno { height: 100%; width: 0; background: var(--acento); transition: width .25s; }
+  .fila .p { width: 48px; text-align: right; color: var(--suave); font-variant-numeric: tabular-nums; }
+  .fila.top .n { color: var(--acento); font-weight: 600; }
+  .vista { display: flex; align-items: center; gap: 12px; margin-top: 14px; color: var(--suave); font-size: .85rem; }
+  canvas#vista { width: 56px; height: 56px; image-rendering: pixelated; border-radius: 4px; background: #000; flex: none; }
+  #error { color: #c0392b; margin-top: 8px; min-height: 1.2em; font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Clasificador de ropa</h1>
+  <p class="sub">Dibuja la silueta rellena de una prenda (o sube una foto) y la red neuronal te dice qué cree que es.</p>
+
+  <div class="grid">
+    <section class="tarjeta">
+      <canvas id="lienzo" width="280" height="280"></canvas>
+      <div class="botones">
+        <button id="borrar" type="button">Borrar</button>
+        <label class="boton" for="archivo">Subir imagen</label>
+        <input id="archivo" type="file" accept="image/*">
+      </div>
+      <div class="opcion">
+        <label for="grosor">Grosor del pincel</label>
+        <input id="grosor" type="range" min="10" max="60" value="34">
+      </div>
+      <div class="opcion">
+        <label><input id="invertir" type="checkbox"> Invertir colores (prenda oscura sobre fondo claro)</label>
+      </div>
+    </section>
+
+    <section class="tarjeta">
+      <div class="resultado">
+        <div id="emoji">❓</div>
+        <div>
+          <div id="nombre">?</div>
+          <div id="confianza">Dibuja algo para empezar</div>
+        </div>
+      </div>
+      <div id="barras"></div>
+      <div class="vista">
+        <canvas id="vista" width="28" height="28"></canvas>
+        <span>Esto es lo que ve la red: la imagen recortada, ajustada y centrada en 28×28 píxeles.</span>
+      </div>
+      <div id="error"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+// Orden de las clases de Fashion-MNIST (índice 0 al 9)
+const CLASES = [
+  { nombre: 'Camiseta / top', emoji: '👕' },
+  { nombre: 'Pantalón',       emoji: '👖' },
+  { nombre: 'Suéter',         emoji: '🧶' },
+  { nombre: 'Vestido',        emoji: '👗' },
+  { nombre: 'Abrigo',         emoji: '🧥' },
+  { nombre: 'Sandalia',       emoji: '👡' },
+  { nombre: 'Camisa',         emoji: '👔' },
+  { nombre: 'Tenis',          emoji: '👟' },
+  { nombre: 'Bolso',          emoji: '👜' },
+  { nombre: 'Botín',          emoji: '👢' },
+];
+
+const lienzo = document.getElementById('lienzo');
+const ctx = lienzo.getContext('2d', { willReadFrequently: true });
+const vista = document.getElementById('vista');
+const vctx = vista.getContext('2d');
+const grosor = document.getElementById('grosor');
+const TAM = 280;
+
+// ---------- Barras de probabilidad ----------
+const contBarras = document.getElementById('barras');
+const filas = [];
+CLASES.forEach(c => {
+  const f = document.createElement('div');
+  f.className = 'fila';
+  f.innerHTML = `<span class="n">${c.nombre}</span><div class="pista"><div class="relleno"></div></div><span class="p">0%</span>`;
+  contBarras.appendChild(f);
+  filas.push(f);
+});
+
+function mostrarResultado(d) {
+  const clase = CLASES[d.digito];
+  document.getElementById('emoji').textContent = clase.emoji;
+  document.getElementById('nombre').textContent = clase.nombre;
+  document.getElementById('confianza').textContent =
+    `Confianza: ${(d.probabilidades[d.digito] * 100).toFixed(1)}%`;
+  filas.forEach((f, i) => {
+    const p = d.probabilidades[i];
+    f.querySelector('.relleno').style.width = (p * 100) + '%';
+    f.querySelector('.p').textContent = (p * 100).toFixed(1) + '%';
+    f.classList.toggle('top', i === d.digito);
+  });
+}
+
+function reiniciarResultado(mensaje = 'Dibuja algo para empezar') {
+  document.getElementById('emoji').textContent = '❓';
+  document.getElementById('nombre').textContent = '?';
+  document.getElementById('confianza').textContent = mensaje;
+  filas.forEach(f => {
+    f.querySelector('.relleno').style.width = '0';
+    f.querySelector('.p').textContent = '0%';
+    f.classList.remove('top');
+  });
+  vctx.fillStyle = '#000';
+  vctx.fillRect(0, 0, 28, 28);
+}
+
+function mostrarError(texto) {
+  document.getElementById('error').textContent = texto || '';
+}
+
+// ---------- Dibujo con mouse / dedo ----------
+function limpiar() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, TAM, TAM);
+  reiniciarResultado();
+  mostrarError('');
+}
+
+let dibujando = false;
+let ultimo = null;
+
+function posicion(e) {
+  const r = lienzo.getBoundingClientRect();
+  return {
+    x: (e.clientX - r.left) * (TAM / r.width),
+    y: (e.clientY - r.top) * (TAM / r.height),
+  };
+}
+
+lienzo.addEventListener('pointerdown', e => {
+  dibujando = true;
+  lienzo.setPointerCapture(e.pointerId);
+  ultimo = posicion(e);
+  trazar(ultimo, ultimo);
+});
+lienzo.addEventListener('pointermove', e => {
+  if (!dibujando) return;
+  const p = posicion(e);
+  trazar(ultimo, p);
+  ultimo = p;
+});
+function terminarTrazo() {
+  if (!dibujando) return;
+  dibujando = false;
+  predecir();
+}
+lienzo.addEventListener('pointerup', terminarTrazo);
+lienzo.addEventListener('pointercancel', terminarTrazo);
+
+function trazar(a, b) {
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = Number(grosor.value);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+}
+
+document.getElementById('borrar').addEventListener('click', limpiar);
+
+// ---------- Subir imagen ----------
+document.getElementById('archivo').addEventListener('change', e => {
+  const archivo = e.target.files[0];
+  e.target.value = '';
+  if (!archivo) return;
+  const url = URL.createObjectURL(archivo);
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    cargarImagen(img);
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    mostrarError('No se pudo leer esa imagen.');
+  };
+  img.src = url;
+});
+
+function cargarImagen(img) {
+  const invertir = document.getElementById('invertir').checked;
+  // Ajustar la imagen al lienzo manteniendo proporción
+  const escala = Math.min(TAM / img.width, TAM / img.height);
+  const w = img.width * escala, h = img.height * escala;
+  ctx.fillStyle = invertir ? '#fff' : '#000';
+  ctx.fillRect(0, 0, TAM, TAM);
+  ctx.drawImage(img, (TAM - w) / 2, (TAM - h) / 2, w, h);
+
+  // Escala de grises (y negativo si hace falta)
+  const datos = ctx.getImageData(0, 0, TAM, TAM);
+  const d = datos.data;
+  const gris = new Float32Array(TAM * TAM);
+  let min = 255, max = 0;
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    let g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    if (invertir) g = 255 - g;
+    gris[j] = g;
+    if (g < min) min = g;
+    if (g > max) max = g;
+  }
+  // Estirar el contraste para que el fondo quede negro y la prenda clara
+  const rango = Math.max(max - min, 1);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    const v = ((gris[j] - min) / rango) * 255;
+    d[i] = d[i + 1] = d[i + 2] = v;
+    d[i + 3] = 255;
+  }
+  ctx.putImageData(datos, 0, 0);
+  predecir();
+}
+
+// ---------- Preprocesamiento estilo Fashion-MNIST ----------
+// Las imágenes de Fashion-MNIST están recortadas, escaladas para que su lado
+// más largo mida 28 píxeles, y centradas. Aquí hacemos lo mismo.
+function procesar(origen) {
+  const w = origen.width, h = origen.height;
+  const datos = origen.getContext('2d').getImageData(0, 0, w, h).data;
+
+  let minX = w, minY = h, maxX = -1, maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (datos[(y * w + x) * 4] > 40) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return null; // lienzo vacío
+
+  const bw = maxX - minX + 1, bh = maxY - minY + 1;
+  const escala = 28 / Math.max(bw, bh);
+  const nw = Math.max(1, Math.round(bw * escala));
+  const nh = Math.max(1, Math.round(bh * escala));
+
+  const final = document.createElement('canvas');
+  final.width = 28; final.height = 28;
+  const fctx = final.getContext('2d', { willReadFrequently: true });
+  fctx.fillStyle = '#000';
+  fctx.fillRect(0, 0, 28, 28);
+  fctx.imageSmoothingEnabled = true;
+  fctx.imageSmoothingQuality = 'high';
+  // Centrar la prenda recortada en la imagen de 28x28
+  fctx.drawImage(origen, minX, minY, bw, bh,
+                 Math.floor((28 - nw) / 2), Math.floor((28 - nh) / 2), nw, nh);
+
+  const fd = fctx.getImageData(0, 0, 28, 28).data;
+  const pixeles = new Array(784);
+  for (let i = 0; i < 784; i++) pixeles[i] = fd[i * 4] / 255;
+  return { pixeles, canvas: final };
+}
+
+// ---------- Llamada al servidor ----------
+let peticion = 0;
+async function predecir() {
+  const resultado = procesar(lienzo);
+  if (!resultado) { reiniciarResultado(); return; }
+
+  vctx.imageSmoothingEnabled = false;
+  vctx.drawImage(resultado.canvas, 0, 0);
+
+  const mia = ++peticion;
+  try {
+    const resp = await fetch('/predecir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pixeles: resultado.pixeles }),
+    });
+    const datos = await resp.json();
+    if (!resp.ok) throw new Error(datos.error || 'Error del servidor');
+    if (mia !== peticion) return; // llegó una respuesta más nueva
+    mostrarError('');
+    mostrarResultado(datos);
+  } catch (err) {
+    if (mia === peticion) mostrarError('No se pudo contactar con el servidor: ' + err.message);
+  }
+}
+
+limpiar();
+</script>
+</body>
+</html>
